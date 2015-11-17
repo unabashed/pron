@@ -1,0 +1,163 @@
+#!/bin/bash
+
+#--------------------------------------------------------------------------
+#                                          
+#                              ▛▀▖▙▀▖▞▀▖▛▀▖
+#                              ▙▄▘▌  ▌ ▌▌ ▌
+#                              ▌  ▘  ▝▀ ▘ ▘
+#
+# Description:
+#   Pronounces words from the command line by querying and playing Wikimedia audio files.
+#
+#--------------------------------------------------------------------------
+#
+# Found this useful? Appalling? Appealing? Please let me know.
+# The Unabashed welcomes your impressions. 
+#
+# You will find the
+#   unabashed
+# at the location opposite to
+#   moc • thgimliam
+#
+#--------------------------------------------------------------------------
+#
+# License:
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+#--------------------------------------------------------------------------
+
+# Program name from its filename
+prog=${0##*/}
+
+# Some colors
+LIGHTRED='\e[1;31m'
+LIGHTPURPLE='\e[1;35m'
+YELLOW='\e[1;33m'
+NC='\e[0m'
+
+# Calling for help is the same as calling without arguments.
+case $1 in --help|-[h?])  $prog; exit 1  ;; esac
+
+# Usage if argument isn't given
+[[ $# -eq 0 ]] && {
+    clear
+    echo -e "
+${LIGHTRED}Description:${NC}
+    Pronounces words using Wikimedia audio files. Often you can try a
+    non-English word and there will be an available pronounciation —
+    especially in French. There's a lot of audio files here:
+    ${LIGHTPURPLE}https://commons.wikimedia.org/wiki/Category:Audio_files_by_language${NC}
+
+${LIGHTRED}Usage and examples:${NC}
+    ${YELLOW}$prog margarine rambunctious${NC}
+    ${YELLOW}$prog Worcestershire${NC}
+    ${YELLOW}$prog karate 椎茸${NC}
+    ${YELLOW}$prog rødgrød_med_fløde${NC}
+    ${YELLOW}$prog Kierkegaard${NC}
+    ${YELLOW}$prog Paris ignorant double_entendre déjà_vu${NC}
+    (and why not, for a change, pronouncing contents instead of the word proper?)
+    ${YELLOW}$prog Jabberwocky${NC}
+    
+
+${LIGHTRED}Dependencies:${NC}
+    ${YELLOW}sudo apt-get install python curl moreutils vorbis-tools${NC}
+    "
+    exit 1
+}
+
+# ---------------------------------------------------------------------- #
+# TODO: If I want the pronunciation of a Czech word                      #
+# that is not linked to the English Wiktionary, it won't                 #
+# find it. For example, ošetřovna has an audio file at                   #
+# https://upload.wikimedia.org/wikipedia/commons/7/7b/Cs-ošetřovna.ogg   #
+# but the word can't be found in English Wiktionary. Gotta fix           #
+# that. Ideally, I'd say the input should be such that if no             #
+# language is specified, everything is returned ("ignorant" would        #
+# return in English and French). Otherwise, if a language is             #
+# specified, then return only that. To fix it, I'll need to find         #
+# where the big repository of all pronounciation files is located,       #
+# or something like that. This link is promising as a starting point:    #
+# https://commons.wikimedia.org/wiki/Category:Pronunciation              #
+# ---------------------------------------------------------------------- #
+# TODO: Sophistication: download a local file with all metadata info and #
+# look it up over there from the second time on. If it doesn't find the  #
+# word, it can then look it up if it was perhaps updated. If it was,     #
+# redownload the file.                                                   #
+# ---------------------------------------------------------------------- #
+
+
+#--------------------------------------------------------------------------
+# Check for missing commands
+needed_commands="curl sponge sed python ogg123"
+
+missing_counter=0
+for needed_command in $needed_commands; do
+    if ! hash "$needed_command" >/dev/null 2>&1; then
+        printf "Command not found in PATH: %s\n" "$needed_command" >&2
+        : $((missing_counter++))
+    fi
+done
+
+if [[ $missing_counter -eq 1 ]]; then
+    printf "At least %d command is missing, install it\n" "$missing_counter" >&2
+    exit 1
+elif [[ $missing_counter -gt 1 ]]; then
+    printf "At least %d commands are missing, install them\n" "$missing_counter" >&2
+    exit 2
+fi
+#----------------------------------------------------------------------------
+
+for term in $*
+do
+    tmpdir="$HOME/tmp"
+    mkdir -p "$tmpdir"
+    ogglinks=$(mktemp --tmpdir="$tmpdir")
+
+    (curl -s -L https://en.wikipedia.org/wiki/Special:Search/$term ;
+     curl -s -L https://en.wiktionary.org/wiki/Special:Search?search=$term) |
+        grep -o 'upload.wikimedia.org/wikipedia/commons/[^"]*ogg' |
+        sort | uniq > $ogglinks
+
+    # FIXME: small problem: by using both Wikipedia and Wiktionary to improve the odds, 
+    #        the chance of false positives also increase. For example, when querying "Paris".
+
+    for alink in $(cat $ogglinks)
+    do
+        python -c "import sys, urllib as ul; print ul.unquote_plus(\"$alink\")"
+    done | sponge $ogglinks     
+    # if you don't want to install moreutils (for sponge), 
+    # triangulate with an extra temp file.
+
+    sed -i 's|^|https://|' $ogglinks
+
+    if [[ $(cat $ogglinks | wc -c) -lt 10 ]]     # tests whether sound files were not found
+    then
+        echo -e "\n\tNo pronunciation available for $term.\n"
+    else
+        echo -e "\n$(cat $ogglinks)"
+        for alink in $(cat $ogglinks); do curl -s -O $alink; done
+            # Older: wget -q $ogglinks. curl doesn't produce invalid encoding.
+        oggfiles=$(cat $ogglinks | sed 's# http#\nhttp#g' | sort | uniq | sed 's#.*/##')
+        echo $oggfiles | 
+            sed 's/ /\x0/g ; s/$/\x0/g' | 
+            xargs -0 -I{} ogg123 {} 2>&-        # -0, so input files can have quotes
+        rm $(echo $oggfiles) $ogglinks
+    fi
+
+    shift
+done
+echo
+
+#------------------END of PROGRAM----------------------------
+
